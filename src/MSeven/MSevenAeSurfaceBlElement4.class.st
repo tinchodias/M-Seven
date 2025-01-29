@@ -1,5 +1,5 @@
 Class {
-	#name : #MSevenAeSurfaceBlElement3,
+	#name : #MSevenAeSurfaceBlElement4,
 	#superclass : #BlElement,
 	#instVars : [
 		'map',
@@ -8,18 +8,28 @@ Class {
 		'cameraAngle',
 		'cameraPosition',
 		'pattern',
-		'scaleFactor'
+		'scaleFactor',
+		'cameraAltitude',
+		'focalLens',
+		'scale'
 	],
 	#category : #'MSeven-POC'
 }
 
 { #category : #drawing }
-MSevenAeSurfaceBlElement3 >> aeDrawGeometryOn: aeCanvas [
+MSevenAeSurfaceBlElement4 >> aeDrawGeometryOn: aeCanvas [
 	"Ignore geometry and other visual properties and directly show a fresh camera surface."
 
+	| newScale |
 	pattern ifNil:[ ^ self ].
 
 	self refreshCameraSurface.
+	
+	"update scale factor"
+	newScale := (self size / cameraResolution).
+	newScale := (newScale x < newScale y ifTrue:[newScale x] ifFalse:[newScale y]).
+	self scaleFactor: newScale. 
+	
 	aeCanvas privateAeCairoContext
 		source: pattern;
 		rectangleTo: self size;
@@ -27,64 +37,73 @@ MSevenAeSurfaceBlElement3 >> aeDrawGeometryOn: aeCanvas [
 ]
 
 { #category : #accessing }
-MSevenAeSurfaceBlElement3 >> cameraPosition: aPoint cameraAngle: aNumber [ 
+MSevenAeSurfaceBlElement4 >> cameraPosition: aPoint cameraAltitude: anAltitude cameraAngle: anAngle [
 
 	cameraPosition := aPoint.
-	cameraAngle := aNumber.
+	cameraAngle := anAngle. 
+	cameraAltitude := anAltitude.
 	self invalidate
 ]
 
+{ #category : #accessing }
+MSevenAeSurfaceBlElement4 >> cameraResolution: aPoint [
+
+	cameraResolution = aPoint ifTrue:[ ^ self ].
+	cameraResolution := aPoint.
+
+	self prepareViewTextureBuffer
+]
+
 { #category : #initialization }
-MSevenAeSurfaceBlElement3 >> initialize [
+MSevenAeSurfaceBlElement4 >> initialize [
 
 	super initialize.
 	
-	scaleFactor := 1.0
+	focalLens := 250.
+	scale := 100.
+	scaleFactor := 1.0.
+	cameraAltitude := 1.0.
+
 ]
 
 { #category : #accessing }
-MSevenAeSurfaceBlElement3 >> map: aForm cameraResolution: aPoint [
+MSevenAeSurfaceBlElement4 >> map: aForm cameraResolution: aPoint [
 
-	map := aForm.
+	map := aForm flipHorizontally.
 	cameraResolution := aPoint.
+
+	self prepareViewTextureBuffer.
+]
+
+{ #category : #accessing }
+MSevenAeSurfaceBlElement4 >> prepareViewTextureBuffer [
 
 	"prepare view texture buffer"
 	cameraSurface :=
 		AeCairoImageSurface
 			extent: cameraResolution
 			format: AeCairoSurfaceFormat argb32.
-	cameraSurface newContext
-		sourceColor: Color black;
-		paint.
 
 	pattern := AeCairoSurfacePattern surface: cameraSurface.
 	pattern filter: AeCairoSamplingFilter nearest.
-	
-	"By default, patterns have the identity matrix.
-	Then, we will only change it if really needed."
-	(scaleFactor closeTo: 1.0) ifFalse: [
-		pattern matrix: (AeCairoMatrix
-			newScalingByX: 1.0 / scaleFactor
-			            y: 1.0 / scaleFactor) ]
 ]
 
 { #category : #initialization }
-MSevenAeSurfaceBlElement3 >> refreshCameraSurface [
+MSevenAeSurfaceBlElement4 >> refreshCameraSurface [
 
-	| width height halfWidth halfHeight focalLens scale sin cos beginHeight bufferAddress horizontalLineByteLength |
+	| width height halfWidth halfHeight sin cos beginHeight bufferAddress horizontalLineByteLength altitude |
 	
 	cameraResolution ifNil:[ ^ self ].
+	cameraSurface ifNil:[ ^ self ].
 	
 	width := cameraResolution x.
 	height := cameraResolution y.
 	halfWidth := (cameraResolution x / 2) asInteger.
 	halfHeight := (cameraResolution y / 2) asInteger.
-	focalLens := 250.
-	scale := 100.
 	sin := cameraAngle sin.
 	cos := cameraAngle cos.
-	beginHeight := height * 0.3.
-
+	beginHeight := height * 0.2.
+	altitude := cameraAltitude.
 	bufferAddress := cameraSurface data.
 	horizontalLineByteLength := cameraSurface stride.
 
@@ -95,7 +114,7 @@ MSevenAeSurfaceBlElement3 >> refreshCameraSurface [
 			"x y z"
 			x := halfWidth - i.
 			y := j + focalLens.
-			z := j - beginHeight + 0.01.
+			z := j - beginHeight + altitude.
 			
 			"rotation"
 			rx := (x * cos) - (y * sin).
@@ -112,19 +131,29 @@ MSevenAeSurfaceBlElement3 >> refreshCameraSurface [
 			floorColor := map colorAt: floorPos.
 			
 			"shading & fog"
-			attenuation := (1.5 * ((z abs) / halfHeight)) max: 0; min: 1.
-			floorColor := floorColor adjustBrightness: ((1 - (attenuation)) negated).
+			attenuation := (10 * ((z abs) / halfHeight)) max: 0; min: 1.
+			floorColor := floorColor adjustBrightness: ((1 - (attenuation))).
 			
 			"fill a pixel"
 			bufferAddress
 				uint32AtOffset: ((j - 1) * horizontalLineByteLength) + ((i - 1) << 2)
-				put: floorColor asPremultipliedARGB32Integer ] ].
+				put: floorColor asPremultipliedARGB32Integer.
+		]. 
+	].
 
 	cameraSurface markDirty
 ]
 
 { #category : #accessing }
-MSevenAeSurfaceBlElement3 >> scaleFactor: aFloat [
+MSevenAeSurfaceBlElement4 >> scaleFactor: aFloat [
 
-	scaleFactor := aFloat
+	scaleFactor = aFloat ifTrue:[ ^ self ].
+
+	scaleFactor := aFloat.
+		
+	"By default, patterns have the identity matrix.
+	Then, we will only change it if really needed."
+	(scaleFactor closeTo: 1.0) ifFalse: [
+		pattern matrix: (AeCairoMatrix	newScalingByX: 1.0 / scaleFactor y: 1.0 / scaleFactor)
+	]
 ]
